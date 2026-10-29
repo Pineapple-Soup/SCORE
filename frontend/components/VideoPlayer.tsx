@@ -40,7 +40,7 @@ const VideoPlayer = (video: VideoPlayerProps) => {
     <video
       ref={videoRef}
       src={video.src}
-      className='w-full h-full object-fill rounded-xl'
+      className='w-full h-full object-contain rounded-xl'
       controls
       controlsList='nodownload nofullscreen noremoteplayback'
       muted
