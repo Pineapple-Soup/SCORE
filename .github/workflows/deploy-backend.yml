@@ -1,0 +1,124 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - backend/**
+      - .github/workflows/deploy-backend.yml
+      - .github/workflows/backend-check.yml
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: >-
+          Existing image tag to deploy (e.g. sha-0cbca46) for a rollback.
+          Leave empty to build and deploy the current commit on main.
+        required: false
+        type: string
+        default: ""
+
+# Never run two deploys at once, and never cancel one that has started.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/pineapple-soup/score-backend
+
+jobs:
+  check:
+    if: inputs.image_tag == ''
+    uses: ./.github/workflows/backend-check.yml
+
+  build:
+    name: build and push image
+    if: inputs.image_tag == ''
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: deploy to production VM
+    needs: build
+    # Run when the build succeeded, or when a rollback tag was supplied (build skipped).
+    # Skipped entirely until the VM_DEPLOY_PATH variable is configured, so merging
+    # workflow changes cannot attempt a deploy before the secrets exist.
+    if: >-
+      !cancelled() &&
+      vars.VM_DEPLOY_PATH != '' &&
+      (inputs.image_tag != '' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ vars.API_DOMAIN }}/health
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          TAG: ${{ inputs.image_tag || needs.build.outputs.tag }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_PATH: ${{ vars.VM_DEPLOY_PATH }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.VM_SSH_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
+          envs: TAG,DEPLOY_SHA,DEPLOY_PATH,GHCR_USER,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_PATH"
+            # Sync compose.yaml / Caddyfile / deploy script to the deployed commit.
+            # .env is gitignored and is never touched by this.
+            git fetch --prune origin
+            git checkout -q main
+            git reset -q --hard "$DEPLOY_SHA"
+            # The job-scoped token can pull the package; it expires when the job ends.
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            bash backend/scripts/deploy.sh "$TAG"
+
+      - name: Public smoke test
+        if: vars.API_DOMAIN != ''
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 10 "https://${{ vars.API_DOMAIN }}/health"; then
+              echo; echo "healthy"; exit 0
+            fi
+            sleep 5
+          done
+          echo "public health check failed"; exit 1

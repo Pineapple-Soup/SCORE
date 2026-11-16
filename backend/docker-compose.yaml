@@ -1,6 +1,11 @@
 services:
   api:
+    # CI publishes this image; BACKEND_IMAGE_TAG is written to .env by scripts/deploy.sh.
+    # `build: .` is kept so `docker compose up -d --build` still works for a manual deploy
+    # (it tags the local build with the same image name).
+    image: ghcr.io/pineapple-soup/score-backend:${BACKEND_IMAGE_TAG:-latest}
     build: .
+    restart: unless-stopped
     expose:
       - "8000"
     env_file:
@@ -8,7 +13,19 @@ services:
     volumes:
       - "${GOOGLE_CREDENTIALS_FILE}:/app/google-application-credentials.json:ro"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Stdlib only: the slim image has no curl. Hits the DB-backed /health route.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   caddy:
     image: caddy:2-alpine
@@ -34,6 +51,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-score}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-score_user} -d ${POSTGRES_DB:-score}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   postgres_data:
