@@ -1,0 +1,57 @@
+name: Backend check
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    name: backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Verify lockfile is up to date
+        run: uv lock --check
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Type check (pyrefly)
+        run: uv run pyrefly check
+
+      - name: Verify app imports with dummy settings
+        # Settings() is instantiated at import time, so supply placeholder env.
+        # No database connection is made: create_engine is lazy and init_db()
+        # only runs when main.py is imported, which we deliberately avoid here.
+        env:
+          AUTH_REDIRECT_URI: http://localhost/auth/google/callback
+          AUTH_JWT_SECRET: ci
+          AUTH_JWT_EXP_SECONDS: "3600"
+          AUTH_GOOGLE_ID: ci
+          AUTH_GOOGLE_SECRET: ci
+          GOOGLE_APPLICATION_CREDENTIALS: /dev/null
+          DATABASE_URL: postgresql+psycopg://ci:ci@localhost:5432/ci
+          GCS_BUCKET_NAME: ci
+          YOLO_MODEL_PATH: /dev/null
+          FRONTEND_URL: http://localhost:3000
+          BACKEND_URL: http://localhost:8000
+          ADMIN_EMAIL: ci@example.com
+          ADMIN_PASSWORD: ci
+          IS_PRODUCTION: "false"
+        run: uv run python -c "import app.api.v1.router, app.services.auth; print('imports ok')"
+
+      - name: Docker build smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
