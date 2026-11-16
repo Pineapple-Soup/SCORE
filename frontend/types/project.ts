@@ -7,7 +7,7 @@ export interface ProjectMember {
   projectId: string;
   userId: string;
   user: User;
-  created_at: string;
+  createdAt: string | null;
 }
 
 export interface ProjectVideo {

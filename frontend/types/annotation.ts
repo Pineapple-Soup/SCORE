@@ -9,9 +9,9 @@ export type Segment = {
 
 export type Annotation = {
   id: string;
-  assignment_id: string;
+  assignmentId: string;
   segments: Segment[];
   submitted: boolean;
-  submitted_at: string;
-  updated_at: string;
+  submittedAt: string | null;
+  updatedAt: string | null;
 };

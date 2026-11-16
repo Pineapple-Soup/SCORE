@@ -45,7 +45,7 @@ const ControlPanel = () => {
         );
         if (data) {
           setSegments(data.segments);
-          setSubmitted(data.submitted, data.submitted_at);
+          setSubmitted(data.submitted, data.submittedAt);
         }
       } catch (err) {
         console.error("Failed to fetch annotation", err);
@@ -192,7 +192,7 @@ const ControlPanel = () => {
           `/api/v1/annotations/${currentAssignmentId}/submit`,
         );
 
-        setSubmitted(true, data.submitted_at);
+        setSubmitted(true, data.submittedAt);
       } catch (err) {
         console.error("Error submitting annotation", err);
         throw err;
